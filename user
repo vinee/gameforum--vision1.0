@@ -1,0 +1,1125 @@
+<?php /*?>手机客户端用户信息请求接口<?php */?>
+
+<?php
+session_start();
+
+defined('UC_API');
+//discuz核心调用初始化
+require_once '../source/class/class_core.php';
+
+$discuz = C::app();
+
+//核心类
+$discuz->init();
+require_once '../config/config_ucenter.php';
+require_once '../uc_client/client.php';
+mysql_query("set names utf8");//同一编码格式                                                                      
+$ac = $_GET['ac'];
+$URL = 'http://112.124.32.253';
+$rows = 10;//每页显示的条数
+if($ac == 'login') //登录接口
+{
+  $logininfo = json_decode(file_get_contents("php://input"),true); 
+	$username = $logininfo['username'];
+	$pwd = $logininfo['password'];   
+	$userid = uc_user_login($username, $pwd);
+	if($userid[0] == -1)
+	{
+		$status = -1;
+		$res = array(
+					'status' => $status,//登录失败标识  
+					'errormessage' => '用户不存在，或者被删除'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	else if($userid[0] == -2)
+	{
+		$status = -2;
+		$res = array(
+					'status' => $status,//登录失败标识  
+					'errormessage' => '密码错误'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	else if($userid[0] > 0)
+	{
+		$verify = DB::fetch_first("SELECT * FROM ".DB::table('ucenter_members')." WHERE username = "."'".$username."'");//用户真实信息
+		$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$verify['uid']);//用户注册时的基本信息
+		$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$verify['uid']);//用户扩展信息
+		$group = DB::fetch_first("SELECT grouptitle FROM ".DB::table('common_usergroup')." WHERE groupid = ".$user['groupid']);		
+		$userinfo = array('username' => $verify['username'],'userid' => $verify['uid']);
+		$avatarstatus = $user['avatarstatus'];
+		if($avatarstatus == 0)
+		{
+			if($user_extend_nick['gender'] == 1)//男生头像
+			{
+				$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+			}
+		}
+		else
+		{
+			$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($user['uid'],'middle');//头像
+		}
+		$status = 0;//表示成功
+		$_SESSION['username'] = $userinfo['username'];  
+		$_SESSION['userid'] = $userinfo['userid'];  
+		$sessionid=session_id();
+		$_SESSION['$sessionid'] = $sessionid;
+		//登录成功信息json格式封装
+		$res = array(
+				'status' => $status,//登录成功标识  			
+				'userid' => $userinfo['userid'],
+				'username' => $userinfo['username'],
+				//'avatar' => $URL.'/uc_server/data/avatar/000/00/00/'.$verify['uid'].'_avatar_small.jpg',//头像
+				'avatarpath' => $avatarpath,//头像
+				'nickname' => $user['nickename'],//昵称
+				'usergroup' => $group['grouptitle'],
+				'email' => $user['email'],//邮箱
+				'newmessage' => $user['newpm'],//新消息数量
+				'gender' => $user_extend_nick['gender'],//性别
+				'location' => $user_extend_nick['birthprovince'],//出生地
+				'birthyear' => $user_extend_nick['birthyear'],
+				'birthmonth' => $user_extend_nick['birthmonth'],
+				'birthday' => $user_extend_nick['birthday'],
+				'credits' => $user['credits'],//当前总积分
+				'errormessage' => '',//成功错误信息为空				  
+				'sessionid' => $sessionid
+		);		
+		print_r(json_encode($res));
+		return;
+	}
+	else
+	{
+		$status = false;
+		$res = array(
+					'status' => $status,//登录失败标识  
+					'errormessage' => '未知错误'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+}
+
+else if($ac == 'register') //注册接口
+{
+	$reginfo = json_decode(file_get_contents("php://input"),true);
+	$username = $reginfo['username'];
+	$pwd = $reginfo['password'];
+	$time = time();
+	$uid = uc_user_register($username, $pwd,$time.'wudi@wudi360.com');
+    if($uid <= 0) 
+	{
+		if($uid == -1) 
+		{
+			//echo '用户名不合法';
+			$registerstatus = -1;
+			$res = array(
+				'status' => $registerstatus,//注册失败标识
+				'errormessage' => '用户名不合法'//失败信息提示
+			);
+			print_r(json_encode($res));
+			return;
+		} 
+		else if($uid == -3) 
+		{
+			//echo '用户名已经存在';
+			$registerstatus = -2;
+			$res = array(
+				'status' => $registerstatus,//注册失败标识
+				'errormessage' => '用户名已经存在'//失败信息提示
+			);
+			print_r(json_encode($res));
+			return;
+		} 		
+	} 
+	else 
+	{
+		//echo '注册成功';
+		$inset_common = DB::insert('common_member',array('uid' => $uid,'username' => $username,'password' => md5($pwd),'email' => $time.'wudi@wudi360.com','groupid' => 10,'regdate' => time(),'timeoffset' => 9999));
+	    $userinfo_res = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = $uid");//用户注册时用户名判断
+		$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = $uid");//用户注册时的基本信息
+		$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = $uid");//用户扩展信息
+		$group = DB::fetch_first("SELECT grouptitle FROM ".DB::table('common_usergroup')." WHERE groupid = ".$userinfo_res['groupid']);
+		$avatarpath = $URL.'/uc_server/images/female_middle.gif';		
+		$registerstatus = 0;
+		$_SESSION['username'] = $userinfo['username'];  
+		$_SESSION['userid'] = $userinfo['userid'];  
+		$sessionid=session_id();
+		$_SESSION['$sessionid'] = $sessionid;
+		//注册成功信息json格式封装
+		$res = array(				
+				'userid' => $uid, 
+				'username' => $username,
+				'status' => $registerstatus,//注册成功标识
+				'sessionid' => $sessionid,
+				'email' => $time.'wudi@wudi360.com',
+				'gender' => 2,	
+				'usergroup' => 'lv.1 王国平民',			
+				'avatarpath' => $avatarpath,//头像地址，处理
+				'regdate' => $time,//注册时间				
+				'errormessage' => '',
+		);
+		print_r(json_encode($res));
+		return;
+	}
+}
+
+else if($ac == 'editavatar') //更改头像接口  修改avatarstatus字段
+{
+	//$uid = $_POST['userid'];
+	//$avatarpath = 'http://192.168.0.134/uc_server/data/avatar/000/00/00/02_avatar_small.jpg';
+	$info = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$userid = $info['userid'];
+	$pi = base64_decode($info['file']);
+	$big = '../uc_server/data/avatar/'.avatar_path($userid,'big');
+	$middle = '../uc_server/data/avatar/'.avatar_path($userid,'middle');
+	$small = '../uc_server/data/avatar/'.avatar_path($userid,'small');
+	upload_avatar($big,$pi);
+	upload_avatar($middle,$pi);
+	upload_avatar($small,$pi);
+	$res = array(
+				'status' => true,
+				'userid' => $userid,
+				'avatarpath' => $URL.'/uc_server/data/avatar/'.avatar_path($userid,'middle')//头像	
+	);
+	DB::query("UPDATE ".DB::table('common_member')." SET avatarstatus = 1 WHERE uid = $userid");
+	print_r(json_encode($res));
+	return;
+}
+
+else if($ac == 'editpassword') //修改密码
+{
+	$info = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据	
+	$userid = $info['userid'];
+	$password = $info['password'];
+	$newpassword = $info['newpassword'];
+//print_r($password);
+//print_r($newpassword);
+	$userinfo = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = $userid");//用户注册时用户名判断
+	//print_r($userinfo['username']);
+	//return;
+	if(empty($userinfo))
+	{
+		$status = -1;
+		$res = array(
+					'status' => $status,
+					'message' => '用户不存在'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	$updatepwd = uc_user_edit($userinfo['username'],$password,$newpassword,'');
+	if($updatepwd != 1 || $updatepwd != 0)//1表示修改成功，0表示没有任何修改
+	{
+		$status = -2;
+		$res = array(
+					'status' => $status,
+					'message' => '密码修改失败'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	$pwd = array(
+				'status' => 1,//修改成功
+				'userid' => $userid,
+				'oldpassword' => $password,//旧密码
+				'newpassword' => $newpassword,//新密码
+	);
+	print_r(json_encode($pwd));
+	return;
+}
+
+else if($ac == 'editinfo') //更改个人信息接口
+{
+	$info = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据	
+	$uid = $info['userid'];
+	$insert_user_common_member_profile = array(	
+											'uid' => $uid,								
+											'gender' => $info['gender'],
+											'residedist' => $info['location'],
+											'birthyear' => $info['birthyear'],
+											'birthmonth' => $info['birthmonth'],
+											'birthday' => $info['birthday']										
+									
+	);
+	$user_exist = DB::fetch_first("SELECT uid FROM ".DB::table('common_member_profile')." WHERE uid = $uid");
+	$user = DB::fetch_first("SELECT avatarstatus FROM ".DB::table('common_member')." WHERE uid = $uid");//用户注册时的基本信息
+	$avatarstatus = $user['avatarstatus'];
+	if($avatarstatus == 0)
+	{
+		if($info['gender'] == 1)//男生头像
+		{
+			$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+		}
+		else
+		{
+			$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+		}
+	}
+	else
+	{
+		$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($uid,'middle');//头像
+	}
+	if(empty($user_exist))
+	{
+		$res_profile = DB::insert('common_member_profile',$insert_user_common_member_profile);
+	}
+	else 
+	{
+		$res_profile = DB::update('common_member_profile',$insert_user_common_member_profile,array('uid' => $uid));
+	}
+	if(! $res_profile)
+	{
+		$status = false;
+		$res = array(
+					'status' => $status,
+					'errormessage' => '数据写入出错' 
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	$status = true;
+	$userinfo = array(
+					'status' => $status,//登录成功标识  			
+					'userid' => $info['userid'],
+					'gender' => $info['gender'],
+					'location' => $info['location'],//出生地
+					'birthyear' => $info['birthyear'],
+					'birthmonth' => $info['birthmonth'],
+					'birthday' => $info['birthday'],	
+					'avatarpath' => $avatarpath,					
+					'errormessage' => ''		
+	);	
+	print_r(json_encode($userinfo));
+	return;
+}
+
+else if($ac == 'sendmessage') //发送短消息接口
+{
+	$message = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据	
+	$userid = $message['userid'];
+	$touserid = $message['touserid'];
+	$content = $message['message'];
+	$res = uc_pm_send($userid,$touserid,'',$content);
+	if(!$res)
+	{		
+		$status = false;
+		$sendmessage = array(
+				'status' => $status,
+				'errormessage' => '短信息发送失败'
+		);
+		print_r(json_encode($sendmessage));
+		return;
+	}
+	$status = true;
+	$sendmessage = array(
+				'status' => $status,
+				'userid' => $message['userid'],
+				'touserid' => $message['touserid'],
+				'message' => $message['message'],
+				'errormessage' => ''
+	);
+	print_r(json_encode($sendmessage));
+	return;
+}
+
+else if($ac == 'getfriend') //获取用户的好友列表接口
+{
+	$getinfo = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$userid = $getinfo['userid'];
+	$page = $getinfo['page'];
+	$offset = ($page - 1)*$rows;
+	$res_uid = DB::fetch_all("SELECT * FROM ".DB::table('ucenter_members')." WHERE uid = $userid LIMIT $offset,$rows");//该用户是否存在
+	if(empty($res_uid))
+	{
+		$status = false;
+		$res = array(
+					'status' => $status,
+					'errormessage' => '该用户不存在'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	$totnum = DB::fetch_first("SELECT * FROM ".DB::table('common_member_count')." WHERE uid = $userid");//好友总数数组
+	$flist = DB::fetch_all("SELECT * FROM ".DB::table('home_friend')." WHERE uid = $userid or fuid = $userid LIMIT $offset,$rows");//暂时未分页
+	if(empty($flist))
+	{
+		$status = true;
+		$res = array(
+					'status' => true,
+					'errormessage' => '该用户暂时没有好友'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	foreach($flist as $key => $val)
+	{
+		if($val['uid'] != $userid)
+		{
+			$fid = $val['uid'];
+		}
+		if($val['fuid'] != $userid)
+		{
+			$fid = $val['fuid'];
+		}
+		$verify = DB::fetch_first("SELECT * FROM ".DB::table('ucenter_members')." WHERE uid = $fid");//用户真实信息
+		$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = $fid");//用户注册时的基本信息
+		$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = $fid");//用户扩展信息
+		$group = DB::fetch_first("SELECT grouptitle FROM ".DB::table('common_usergroup')." WHERE groupid = ".$user['groupid']);		
+		$avatarstatus = $user['avatarstatus'];
+		if($avatarstatus == 0)
+		{
+			if($user_extend_nick['gender'] == 1)//男生头像
+			{
+				$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+			}
+		}
+		else
+		{
+			$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($user['uid'],'middle');//头像
+		}
+		$friend['status'] = true;
+		$friend['array'][] = array(
+						'userid' => $user['uid'],
+						'username' => $user['username'],
+						'usergroup' => $group['grouptitle'],
+						'email' => $user['email'],
+						'avatarpath' => $avatarpath,
+						'gender' => $user_extend_nick['gender'],
+						'credits' => $user['credits'],
+						'birthyear' => $user_extend_nick['birthyear'],
+						'birthmonth' => $user_extend_nick['birthmonth'],
+						'birthday' => $user_extend_nick['birthday'],
+						'location' => $user_extend_nick['birthprovince'],
+		);
+	}
+	print_r(json_encode($friend));
+	return;
+}
+
+else if($ac == 'getfollow') //获取收听用户的用户列表接口，收听用户的
+{
+	$getinfo = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$userid = $getinfo['userid'];
+	$page = $getinfo['page'];
+	$offset = ($page - 1)*$rows;
+	$res_uid = DB::fetch_first("SELECT * FROM ".DB::table('ucenter_members')." WHERE uid = $userid");
+	if(empty($res_uid))
+	{
+		$status = false;
+		$res = array(
+					'status' => $status,
+					'errormessage' => '该用户不存在'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	$follow = DB::fetch_all("SELECT * FROM ".DB::table('home_follow')." WHERE followuid = $userid LIMIT $offset,$rows");//别人收听自己，自己为被收听的ID
+	if(empty($follow))
+	{
+		$status = true;
+		$res = array(
+					'status' => true,
+					'errormessage' => '该用户没有听众'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	foreach($follow as $key => $val)
+	{
+		$verify = DB::fetch_first("SELECT * FROM ".DB::table('ucenter_members')." WHERE uid = ".$val['uid']);//用户真实信息
+		$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$val['uid']);//用户注册时的基本信息
+		$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$val['uid']);//用户扩展信息
+		$group = DB::fetch_first("SELECT grouptitle FROM ".DB::table('common_usergroup')." WHERE groupid = ".$user['groupid']);	
+		$avatarstatus = $user['avatarstatus'];
+		if($avatarstatus == 0)
+		{
+			if($user_extend_nick['gender'] == 1)//男生头像
+			{
+				$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+			}
+		}
+		else
+		{
+			$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($val['uid'],'middle');//头像
+		}
+		$res_follows[] = array(
+						'userid' => $val['uid'],
+						'username' => $user['username'],
+						'email' => $user['email'],
+						'avatarpath' => $avatarpath,
+						'gender' => $user_extend_nick['gender'],
+						'credits' => $user['credits'],
+						'birthyear' => $user_extend_nick['birthyear'],
+						'birthmonth' => $user_extend_nick['birthmonth'],
+						'birthday' => $user_extend_nick['birthday'],
+						'location' => $user_extend_nick['birthprovince'],	
+						'usergroup' => $group['grouptitle']			
+		);
+	}
+	$follows_res = array(
+						'status' => true,
+						'array' => $res_follows
+	);
+	print_r(json_encode($follows_res));
+	return;
+}
+
+else if($ac == 'getmyattention')//用户的收听
+{
+	$getinfo = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$userid = $getinfo['userid'];
+	$page = $getinfo['page'];
+	$offset = ($page - 1)*$rows;
+	$res_uid = DB::fetch_first("SELECT * FROM ".DB::table('ucenter_members')." WHERE uid = $userid");
+	if(empty($res_uid))
+	{
+		$status = false;
+		$res = array(
+					'status' => $status,
+					'errormessage' => '该用户不存在'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	$attention = DB::fetch_all("SELECT * FROM ".DB::table('home_follow')." WHERE uid = $userid LIMIT $offset,$rows");//别人收听自己，自己为被收听的ID
+	if(empty($attention))
+	{
+		$res = array(
+					'status' => true,
+					'errormessage' => '该用户还未收听任何人'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	//print_r($attention);
+	//return;
+	foreach($attention as $key => $val)
+	{
+		$verify = DB::fetch_first("SELECT * FROM ".DB::table('ucenter_members')." WHERE uid = ".$val['followuid']);//用户真实信息
+		$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$val['followuid']);//用户注册时的基本信息
+		$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$val['followuid']);//用户扩展信息		
+		$avatarstatus = $user['avatarstatus'];
+		if($avatarstatus == 0)
+		{
+			if($user_extend_nick['gender'] == 1)//男生头像
+			{
+				$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+			}
+		}
+		else
+		{
+			$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($user['uid'],'middle');//头像
+		}
+		$res_follows[] = array(
+						'userid' => $user['uid'],
+						'username' => $user['username'],
+						'email' => $user['email'],
+						'avatarpath' => $avatarpath,
+						'gender' => $user_extend_nick['gender'],
+						'credits' => $user['credits'],
+						'birthyear' => $user_extend_nick['birthyear'],
+						'birthmonth' => $user_extend_nick['birthmonth'],
+						'birthday' => $user_extend_nick['birthday'],
+						'location' => $user_extend_nick['birthprovince'],								
+		);
+	}
+	$follows_res = array(
+						'status' => true,
+						'array' => $res_follows
+	);
+	print_r(json_encode($follows_res));
+	return;
+}
+
+else if($ac == 'getinfo') //获取个人信息接口
+{
+	$userinfo = json_decode(file_get_contents("php://input"),true);
+	$userid = $userinfo['userid'];
+	$selfid = $userinfo['selfid'];	
+	if($userid == $selfid)//如果是自己
+	{
+		$isself = true;
+		$verify = DB::fetch_first("SELECT * FROM ".DB::table('ucenter_members')." WHERE uid = ".$selfid);//用户真实信息
+		$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$selfid);//用户注册时的基本信息
+		$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = $selfid");//用户扩展信息
+		$group = DB::fetch_first("SELECT grouptitle FROM ".DB::table('common_usergroup')." WHERE groupid = ".$user['groupid']);		
+		$avatarstatus = $user['avatarstatus'];
+		if($avatarstatus == 0)
+		{
+			if($user_extend_nick['gender'] == 1)//男生头像
+			{
+				$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+			}
+		}
+		else
+		{
+			$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($userid,'middle');//头像
+		}		
+		if(empty($verify))
+		{
+			$status = false;
+		}
+		else
+		{
+			$status = true;
+		}
+		$info = array(
+					'status' => $status,
+					'newmessage' => $user['newpm'],//新短消息
+					'self' => $isself,				
+					'userid' => $userid,
+					'username' => $user['username'],
+					'gender' => $user_extend_nick['gender'],
+					'level' => '',//该等级的积分上限和下限
+					'credits' => $user['credits'],
+					'birthyear' => $user_extend_nick['birthyear'],
+					'birthmonth' => $user_extend_nick['birthmonth'],
+					'birthday' => $user_extend_nick['birthday'],
+					'location' => $user_extend_nick['birthprovince'],
+					'avatarpath' => $avatarpath,
+					'usergroup' => $group['grouptitle']
+		);
+		print_r(json_encode($info));		
+		return;
+	}
+	else//不是自己
+	{
+		$isself = false;
+		$verify = DB::fetch_first("SELECT * FROM ".DB::table('ucenter_members')." WHERE uid = $userid");//用户真实信息
+		$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = $userid");//用户注册时的基本信息
+		$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = $userid");//用户扩展信息
+		$group = DB::fetch_first("SELECT grouptitle FROM ".DB::table('common_usergroup')." WHERE groupid = ".$user['groupid']);		
+		$avatarstatus = $user['avatarstatus'];
+		if($avatarstatus == 0)
+		{
+			if($user_extend_nick['gender'] == 1)//男生头像
+			{
+				$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+			}
+		}
+		else
+		{
+			$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($userid,'middle');//头像
+		}
+		if(empty($verify))
+		{
+			$status = false;//该用户不存在
+		}
+		else
+		{
+			$status = true;
+		}
+		if(!empty($selfid))
+		{
+			$followit = DB::fetch_all("SELECT * FROM ".DB::table('home_follow')." WHERE uid = $selfid");//我是否收听了TA,我收听的列表里是否有TA
+			$followit_bool = false;
+			foreach($followit as $key => $val)
+			{
+				if($val['followuid'] == $userid)
+				{
+					$followit_bool = true;
+					break;
+				}
+			}
+			$myattention = $followit_bool;
+			$followme_res = DB::fetch_all("SELECT * FROM ".DB::table('home_follow')." WHERE followuid = $userid");//TA是否收听了我
+			$followme_bool = false;
+			foreach($followme_res as $key => $val)
+			{
+				if($val['uid'] == $selfid)
+				{
+					$followme_bool = true;
+					break;
+				}
+			}
+			$followme = $followme_bool;
+			$friend_res = DB::fetch_all("SELECT * FROM ".DB::table('home_friend')." WHERE uid = $selfid");//是否是我的好友
+			$friend_bool = false;
+			foreach($friend_res as $key => $val)
+			{
+				if($val['fuid'] == $userid)
+				{
+					$friend_bool = true;
+					break;
+				}
+			}
+			$myfriend = $friend_bool;
+		}		
+		$info = array(
+					'status' => $status,
+					'newmessage' => $user['newpm'],//新短消息
+					'self' => $isself,
+					'followme' => $followme,
+					'myattention' => $myattention,
+					'myfriend' => $myfriend,
+					'userid' => $userid,
+					'username' => $user['username'],
+					'gender' => $user_extend_nick['gender'],
+					'level' => '',//该等级的积分上限和下限
+					'credits' => $user['credits'],
+					'birthyear' => $user_extend_nick['birthyear'],
+					'birthmonth' => $user_extend_nick['birthmonth'],
+					'birthday' => $user_extend_nick['birthday'],
+					'location' => $user_extend_nick['birthprovince'],
+					'avatarpath' => $avatarpath,
+					'usergroup' => $group['grouptitle']
+		);
+		print_r(json_encode($info));
+		return;
+	}
+}
+
+else if($ac == 'addorcancelfollow') //收听TA，myattention==true 加关注 ==false取消关注   自己的id  被关注者id
+{
+	$userinfo = json_decode(file_get_contents("php://input"),true);
+	$selfid = $userinfo['selfid'];//自己的ID
+	$userid = $userinfo['userid'];//要收听的用户或者要取消收听的用户
+	$selfname = DB::fetch_first("SELECT username FROM ".DB::table('common_member')." WHERE uid = $selfid");
+	$fusername = DB::fetch_first("SELECT username FROM ".DB::table('common_member')." WHERE uid = $userid");
+	$time = time();
+	$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = $selfid");//用户注册时的基本信息
+	//start 用户的社交信息	
+	$followit = DB::fetch_all("SELECT followuid FROM ".DB::table('home_follow')." WHERE uid = $selfid");//我是否收听了TA,我收听的列表里是否有TA
+	$followit_bool = false;
+	foreach($followit as $key => $val)
+	{
+		if($val['followuid'] == $userid)
+		{
+			$followit_bool = true;
+			break;
+		}
+	}
+	$myattention = $followit_bool;
+	$followme_res = DB::fetch_all("SELECT followuid FROM ".DB::table('home_follow')." WHERE uid = $userid");//TA是否收听了我
+	$followme_bool = false;
+	foreach($followme_res as $key => $val)
+	{
+		if($val['followuid'] == $selfid)
+		{
+			$followme_bool = true;
+			break;
+		}
+	}
+	$followme = $followme_bool;
+	$friend_res = DB::fetch_all("SELECT * FROM ".DB::table('home_friend')." WHERE uid = $selfid");//是否是我的好友
+	$friend_bool = false;
+	foreach($friend_res as $key => $val)
+	{
+		if($val['fuid'] == $userid)
+		{
+			$friend_bool = true;
+			break;
+		}
+	}
+	$myfriend = $friend_bool;
+	
+	//end 用户社交信息
+	
+	
+//	$is_followed = DB::fecth_all("SELECT * FROM ".DB::table('home_follow')."WHERE uid = $userid");
+//	$is_followed_bool = false;
+//	foreach($is_followed as $key => $val)
+//	{
+//		if($val['followuid'] == $userid)
+//		{
+//			$is_followed_bool = true;
+//			break;
+//		}
+//	}
+	if($userinfo['attention'] == "yes")//收听TA
+	{
+		if($followme_bool)//已经被对方收听
+		{
+			$followit = array(
+							'uid' => $selfid,
+							'username' => $selfname['username'],
+							'fusername' => $fusername['username'],
+							'followuid' => $userid,
+							'mutual' => 1,//非单向收听
+							'dateline' => $time
+			);
+			$insert_res = DB::insert('home_follow',$followit);
+			$followme = array(							
+							'mutual' => 1,//非单向收听
+							'dateline' => $time
+			);
+			$update_res = DB::update('home_follow',$followme,array('uid' => $userid,'followuid' => $selfid));
+			if(!$insert_res || !$update_res)//收听失败
+			{
+				$status = false;
+				$res = array(
+							'status' => $status,
+							'followme' => true,
+							'myattention' => false,
+							'myfriend' => false
+				);
+				print_r(json_encode($res));
+				return;
+			}
+			else//收听成功
+			{
+				$friend_relation = array(
+										'uid' => $selfid,
+										'fuid' => $userid,
+										'fusername' => $fusername['username'],
+										'gid' => 1,
+										'dateline' => $time
+				);
+				$insert_friend = DB::insert('home_friend',$friend_relation);
+				$status = true;
+				$res = array(
+							'status' => $status,
+							'followme' => true,
+							'myattenttion' => true,
+							'myfriend' => true
+				);				
+				print_r(json_encode($res));
+				return;
+			}
+		}
+		else//对方未收听自己
+		{
+			$followit = array(
+							'uid' => $selfid,
+							'followuid' => $userid,
+							'mutual' => 0,//单向收听
+							'dateline' => $time
+			);
+			$follow_res = DB::insert('home_follow',$followit);
+			if(!$follow_res)//收听数据写入失败
+			{
+				$status = false;
+				$res = array(
+							'status' => false,
+							'followme' => false,
+							'myattention' => false,
+							'myfriend' => false
+				);
+				print_r(json_encode($res));
+				return;
+			}
+			else
+			{
+				$status = true;
+				$res = array(
+							'status' => $status,
+							'followme' => false,
+							'myattention' => true,
+							'myfriend' => false
+				);
+				print_r(json_encode($res));
+				return;
+			}
+		}
+	}	
+	else//取消关注 
+	{
+		$res_myattention = DB::delete('home_follow',array('uid' => $selfid,'followuid' => $userid));
+		$res_followme =  DB::delete('home_follow',array('uid' => $userid,'followuid' => $selfid));
+		if($res_myattention || $res_followme)
+		{
+			print_r(json_encode(array('status' => true,'followme' => $followme_bool,'myattention' => false,'myfriend' => $myfriend)));
+			return;
+		}
+	}
+}
+
+else if($ac == 'changemessageaccept')//是否接受陌生人消息
+{
+	//$uid = $_POST['userid'];
+	//$yesorno = $_POST['messageaccept'];
+	$userinfo = json_decode(file_get_contents("php://input"),true);
+	$uid = $userinfo['userid'];
+	$messageaccept = $userinfo['messageaccept'];
+	$change = array(
+					'status' => true,
+					'userid' => 1,
+					'onlyacceptfriendpm' => $messageaccept,//要修改的状态,0为接受，1为不接受
+	);
+	$upres = DB::update(DB::table('common_member'),$change);
+	if(!$upres)
+	{
+		$status = false;
+		$res = array(
+					'status' => $status,
+					'errormessage' => '接受消息模式修改失败'
+		);
+		print_r(json_encode($res));
+		return;
+	}
+	$status = true;
+	$res = array(
+				'status' => $status,
+				'errormessage' => ''
+	);
+	print_r(json_encode($change));
+	return;
+}
+
+else if($ac == 'changefollowaccept') //是否允许被关注
+{
+	//uid = $_POST['userid'];
+	$change = array(
+					'status' => true,
+					'userid' => 1,
+					'iffollowd' => 1,//1允许被收听，0不允许被收听
+	);
+	print_r(json_encode($change));
+	return;
+}
+
+else if($ac == 'getnewmessage')//获取新消息
+{
+	$userinfo = json_decode(file_get_contents("php://input"),true);
+	$userid = $userinfo['userid'];
+	$newcount = uc_pm_checknew($userid);
+	if($newcount == 0)
+	{
+		print_r(json_encode(array('status' => true,'errormessage' => '该用户没有新消息')));
+		return;
+	}
+	$newpm = uc_pm_list($userid,'newpm');
+	$res = array();
+	//foreach($newpm as $key => $val)
+//	{
+//		$res = $val;
+//		//$res[$val['touid']]= DB::fetch_all("SELECT * FROM ".DB::table('ucenter_pm_messages_').$val['plid']." WHERE authorid = ".$val['touid']);
+//	}
+	foreach($newpm['data'] as $key => $val)
+	{
+		$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$val['touid']);//用户注册时的基本信息
+		$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$user['uid']);//用户扩展信息
+		$avatarstatus = $user['avatarstatus'];
+		if($avatarstatus == 0)
+		{
+			if($user_extend_nick['gender'] == 1)//男生头像
+			{
+				$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+			}
+		}
+		else
+		{
+			$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($userid,'middle');//头像
+		}
+		$res[] = array(
+					'touserid' => $val['touid'],
+					'touseravatarpath' => $avatarpath,
+					'tousername' => $val['tousername'],
+					'lastmessage' => $val['message'],
+					'lastmessagedate' => $val['dateline']
+		);
+	}
+	$data = array(
+				'status' => true,
+				'array' => $res
+	);
+	print_r(json_encode($data));
+	return;
+}
+
+else if($ac == 'getmessagedetail')//获取消息对话详情
+{
+	$userinfo = json_decode(file_get_contents("php://input"),true);
+	$userid = $userinfo['userid'];
+	$touserid = $userinfo['touserid'];
+	$page = $userinfo['page'];
+	$offset = ($page-1) * $rows;
+	$mm = min($userid,$touserid)."_".max($userid,$touserid);
+	$all = DB::fetch_all("SELECT plid FROM ".DB::table('ucenter_pm_lists')." WHERE min_max = "."'".$mm."'");
+	$newmessage = DB::fetch_all('SELECT * FROM '.DB::table('ucenter_pm_messages_').($all[0]['plid']%10)." WHERE authorid = ".$touserid." OR authorid = ".$userid." ORDER BY  dateline DESC LIMIT $offset, $rows");
+	foreach($newmessage as $key => $val)
+	{
+		$res[] = array(
+					'senderid' => $val['authorid'],
+					'senddate' => $val['dateline'],
+					'message' => $val['message']
+		);
+	}
+	$data = array(
+				'status' => true,
+				'array' => $res
+	);
+	print_r(json_encode($data));
+	return;
+}
+
+else if($ac == 'notification')//推送通知设置
+{
+	$info = json_decode(file_get_contents("php://input"),true);
+	if(!isset($info['devicetoken']))
+	{
+		return;
+	}
+	notification($info['userid'],$info['devicetoken'],$info['notification']);
+}
+
+function json_request()
+{
+	$info = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	return $info;
+}
+
+function random_num()//随机数
+{
+	srand((double)microtime()*1000000);//create a random number feed.
+	//$ychar="0,1,2,3,4,5,6,7,8,9,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z";
+	$ychar = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz';
+	$list=explode(",",$ychar);
+	for($i=0;$i<6;$i++)
+	{
+		$randnum=rand(0,35); // 10+26;
+		$authnum.=$list[$randnum];
+	}
+	return $authnum;
+}
+
+//function add_credit($uid,$credit)
+//{	
+//	$addcredit = DB::query("UPDATE ".DB::table('common_member')." SET credits = credits + $credit WHERE uid = $uid");
+//}
+
+function avatar_path($uid,$size='middle')
+{
+	 $size= in_array($size,array('big','middle','small')) ?$size:'middle';
+	 $uid=abs(intval($uid));//UID取整数绝对值
+	 $uid= sprintf("%09d",$uid);//前边加0补齐9位，例如UID为31的用户变成 000000031
+	 $dir1=substr($uid, 0, 3); //取左边3位，即 000
+	 $dir2=substr($uid, 3, 2); //取4-5位，即00
+	 $dir3=substr($uid, 5, 2); //取6-7位，即00
+// 下面拼成用户头像路径，即000/00/00/31_avatar_middle.jpg
+	return $dir1.'/'.$dir2.'/'.$dir3.'/'.substr($uid, -2)."_avatar_$size.jpg";
+}
+
+
+function upload_avatar($newfilepath,$data)
+{
+	$newfile = fopen($newfilepath,"w");
+	fwrite($newfile,$data);
+	fclose($newfile);
+	return true; 
+}
+
+//function upload_avatar($uid,$kind,$info)
+//{
+//	$dir = $URL.'/uc_server/data/avatar/'.avatar_path($uid,$kind);	
+//	$newFilePath = $dir;  
+////	$data = $GLOBALS[HTTP_RAW_POST_DATA];//得到post过来的二进制原始数据
+////	if(empty($data)){   
+////		$data=file_get_contents("php://input");  
+////	}  
+//	$data = $info;
+//	$newFile = fopen($newFilePath,"w");//打开文件准备写入
+//	fwrite($newFile,$data);//写入二进制流到文件
+//	fclose($newFile);//关闭文件
+//}
+
+//function upload_avatar($uid,$kind)
+//{
+//	//$suffix = pathinfo($_FILES["file"]["name"],PATHINFO_EXTENSION); 	
+//	$dir = $URL.'/uc_server/data/avatar/'.avatar_path($uid,$kind);	
+//	if ((($_FILES["file"]["type"] == "image/gif")|| ($_FILES["file"]["type"] == "image/jpeg") || ($_FILES["file"]["type"] == "image/pjpeg")) && ($_FILES["file"]["size"] < 20000))//2K以下头像
+//	{
+//		if ($_FILES["file"]["error"] > 0)
+//		{
+//			print_r(json_encode(array('status' => false,'errormessage' => $_FILES["file"]["error"])));
+//			return;
+//		}
+//		else
+//		{	
+//		   if (file_exists($dir))
+//		   {
+//			  print_r(json_encode(array('status' => false,'errormessage' => '图片已经存在')));
+//		   }
+//		   else
+//		   {
+//			   move_uploaded_file($_FILES["file"]["tmp_name"],$dir.".".$suffix);			   
+//			   print_r(json_encode(array('status' => true,'errormessage' => '头像上传成功')));
+//			   return;
+//		   }
+//		}
+//	}
+//	else
+//	{
+//		print_r(json_encode(array('status' => false,'errormessage' => '图片无效')));
+//		return;
+//	}
+//}
+
+function getusergroup($uid)
+{
+	$groupid = DB::fetch_fist("SELECT groupid FROM ".DB::table('common_member')."WHERE uid = $uid");
+	$grouptitle = DB::fetch_fist("SELECT grouptitle FROM ".DB::table('common_usergroup')."WHERE groupid = $groupid");
+	return $grouptitle;
+}
+
+function propelling()//推送通知
+{				   
+	$deviceToken= '2f8c65d77444894d82208c9c18f2d9a68bc3b6f126a85b14a45e3c4a4829cffb'; //没有空格
+	$body = array("aps" => array("alert" => '你有新消息啦',"badge" => 2,"sound"=>'default'));  //推送方式，包含内容和声音
+	$ctx = stream_context_create();
+	//如果在Windows的服务器上，寻找pem路径会有问题，路径修改成这样的方法：
+	//$pem = dirname(__FILE__) . '/' . 'apns-dev.pem';
+	//linux 的服务器直接写pem的路径即可
+	stream_context_set_option($ctx,"ssl","local_cert","apns-dev.pem");
+	$pass = "xxxxxx";
+	stream_context_set_option($ctx, 'ssl', 'passphrase', $pass);
+	//此处有两个服务器需要选择，如果是开发测试用，选择第二名sandbox的服务器并使用Dev的pem证书，如果是正是发布，使用Product的pem并选用正式的服务器
+	//$fp = stream_socket_client("ssl://gateway.push.apple.com:2195", $err, $errstr, 60, STREAM_CLIENT_CONNECT, $ctx);
+	$fp = stream_socket_client("ssl://gateway.sandbox.push.apple.com:2195", $err, $errstr, 60, STREAM_CLIENT_CONNECT, $ctx);
+	if (!$fp) {
+	echo "Failed to connect $err $errstrn";
+	return;
+	}
+	print "Connection OK\n";
+	$payload = json_encode($body);
+	$msg = chr(0) . pack("n",32) . pack("H*", str_replace(' ', '', $deviceToken)) . pack("n",strlen($payload)) . $payload;
+	echo "sending message :" . $payload ."\n";
+	fwrite($fp, $msg);
+	fclose($fp);
+}
+
+function notification($userid,$devicetoken,$notice)
+{
+	if($userid == 0)
+	{
+		$del_token = DB::delete('push_information',array('device' => $devicetoken));
+		$insert_token = DB::insert("push_information",array('userid' => $userid,'device' => $devicetoken,'notification' => $notice));
+		return;
+	}
+	$del_by_userid = DB::delete("push_information",array('userid' => $userid));
+	$del_by_token = DB::delete("push_information",array('device' => $devicetoken));
+	$res = DB::insert("push_information",array('userid' => $userid,'device' => $devicetoken,'notification' => $notice));	
+}
+
+?>

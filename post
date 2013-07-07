@@ -1,0 +1,1055 @@
+<?php /*?>论坛帖子请求接口<?php */?>
+
+<?php
+session_start();
+
+//discuz核心调用初始化
+require_once '../source/class/class_core.php';
+
+$discuz = C::app();
+
+//核心类
+$discuz->init();
+require_once '../config/config_ucenter.php';
+require_once '../uc_client/client.php';
+require_once '../source/function/function_forum.php';
+require_once '../uc_client/model/pm.php';
+require_once "../source/function/function_post.php";//同步积分等级规则
+
+$ac = $_GET['ac'];
+$rows = 10;//每页显示的条数
+$URL = 'http://112.124.32.253';
+$pic_prefix = $URL."/data/attachment/forum/";
+if($ac == 'usertopic')//用户发过的帖子接口
+{
+  $topicquery = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$section = $topicquery['section'];
+	$userid = $topicquery['userid'];
+	$topic = DB::fetch_all("SELECT * FROM ".DB::table('forum_thread')." WHERE authorid = $userid");
+	$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = $userid");//用户注册时的基本信息
+	if(empty($topic))
+	{
+		print_r(json_encode(array('status' => true,'errormessage' => '该用户还没有发过帖子')));
+		return;
+	}	
+	$topic_detail_array = array();
+	foreach($topic as $key => $val)
+	{		
+		$topic_detail_array[] = array(
+									'topicid' => $val['tid'],
+									'section' => $val['fid'],//君王2  junwang2   全局数组 array('1' => 'junwang2')				
+									'flag' => $val['digest'],//1 普通话 2 热门 3精华
+									'topictitle' => $val['subject'],
+									'viewcount' => $val['views'],
+									'replycount' => $val['replies'],
+									'publishdate' => $val['dateline'],
+									'lastreplydate' => $val['lastpost'],
+		);
+	}
+	$res = array(
+				'status' => true,
+				'page' => $topicquery['page'],
+				'array' => $topic_detail_array
+	);
+	print_r(json_encode($res));
+	return;
+}
+
+else if($ac == 'userreply')//用户发过的回复接口  position != 1
+{
+	$replyquery = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$userid = $replyquery['userid']; 
+	$reply_all = DB::fetch_all("SELECT * FROM ".DB::table('forum_post')." WHERE authorid = $userid AND first != 1");
+	if(empty($reply_all))
+	{
+		print_r(json_encode(array('status' => true,'message' => '该用户暂未参与回复')));
+		return;
+	}	
+	$reply_detail_array = array();
+	foreach($reply_all as $key => $val)
+	{
+		$topic = DB::fetch_first("SELECT * FROM ".DB::table('forum_post')." WHERE tid = ".$val['tid']." AND first = 1");//回复的主题名
+		$reply_detail_array[] = array(
+									'replyid' => $val['pid'],
+									'topicid' => $val['tid'],									
+									'replycontent' => $val['message'],
+									'topictitle' => $topic['subject'],
+									'publishdate' => $val['dateline'],
+		);
+	}
+	$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = $userid");//用户注册时的基本信息
+	$reply = array(
+					'status' => true,
+					'userid' => $replyquery['userid'],
+					'page' => $replyquery['page'],
+					'array' => $reply_detail_array
+	);
+	print_r(json_encode($reply));
+	return;
+}
+
+else if($ac == 'publishtopic')//发帖接口
+{
+	$topic = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$topic['userid']);//用户注册时的基本信息
+	$time = time();
+	$pic = 0;
+	if(isset($topic['file']))//如果包含图片
+	{
+		$doc = date("Ym")."/".date("d")."/";
+		$prefix = "../data/attachment/forum/";
+		$temppath = $prefix.$doc;
+		mkdirs($temppath);
+		$pic = 2;
+		$pi = base64_decode($topic['file']);//编码转换从手机端传来的由二进制转换来的字符串数据
+		$ppp = pic_path();
+		$pic_res = extend_upload_pictrue($ppp['dir'],$pi);
+		$path = $ppp['path'];
+	}
+	$data = array(
+				'fid' => $topic['section'],
+				'posttableid' => 0,
+				'typeid' => 0,			
+				'sortid' => 0,			
+				'readperm' => 0,
+				'price' => 0,
+				'attachment' => $pic,
+				'author' => $user['username'],
+				'authorid' => $topic['userid'],
+				'subject'   => $topic['title'],				
+				'dateline'  => $time,
+				'lastpost'  => $time,
+				'lastposter' => $user['username']				
+	);
+	$tid = DB::insert('forum_thread',$data,true);//插入主题	
+	if($tid < 0)
+	{
+		DB::delete('forum_thread',array('tid' => $tid));
+		print_r(json_encode(array('status' => false,'errormessage' => '主题写入失败')));
+		return;
+	}		
+	$pid = DB::fetch_first('SELECT pid FROM '.DB::table('forum_post')." ORDER BY pid DESC");
+	$res = insertpost(//插入帖子
+					array(
+					'pid' => $pid['pid']+1,
+					'fid' => $topic['section'],
+					'tid' => $tid,
+					'first' => 1,
+					'author' => $user['username'],
+					'authorid' => $topic['userid'],
+					'subject' => $topic['title'],
+					'dateline' => $time,
+					'message'=> $topic['content'],
+					'useip' => getIP(),
+					'attachment' => $pic,
+					)
+	);	
+	
+//	$insertpost = array(    			//    					
+//					'fid' => $topic['section'],
+//					'tid' => $tid,
+//					'first' => 1,
+//					'author' => $user['username'],
+//					'authorid' => $topic['userid'],
+//					'subject' => $topic['title'],
+//					'dateline' => $time,
+//					'message'=> $topic['content'],
+//					'useip' => getIP(),
+//					'attachment' => $pic,
+//	);	
+	//$res = DB::insert('forum_post',$insertpost,true);
+    if($res < 0)
+	{
+		DB::delete('forum_thread',array('tid' => $tid));
+		DB::delete('forum_post',array('tid' => $tid));
+		print_r(json_encode(array('status' => false,'errormessage' => '数据写入出错')));
+		return;
+	}
+	$count = DB::fetch_first('SELECT * FROM '.DB::table('common_member_count').' WHERE uid = '.$topic['userid']);
+	DB::update('common_member_count',array('posts' => $count['posts'] + 1,'threads' => $count['threads'] + 1),array('uid' => $topic['userid']));
+	if(isset($topic['file']))//将图片数据写入数据库
+	{
+		DB::insert('forum_attachment',array('tid' => $tid,'pid' => $res,'uid' => $topic['userid'],'tableid' => $tid%10));
+		$attachment_id = DB::fetch_first("SELECT aid,tableid FROM ".DB::table('forum_attachment')." ORDER BY aid DESC");
+		DB::insert('forum_attachment_'.$attachment_id['tableid'],array('aid' => $attachment_id['aid'],'tid' => $tid,'pid' => $res,'uid' => $topic['userid'],'dateline' => $time,'filename' => $path,'attachment' => $path,'width' => $topic['width'],'isimage' => 1));
+	}	
+	$topic = array(
+					'status' => true,
+					'userid' => $topic['userid'],
+					'topicid' => $tid,//'帖子id'
+					'topicsection' => $topic['section'],//论坛的哪个区域					
+					'topictitle' => $topic['title'],//'标题'					
+					'topiccontent' => $topic['content'],//'消息'
+					'publishdate' => $time,//'发表时间'
+					'lastreplydate' => $time,
+					'viewcount' => 0,
+					'replycount' => 0,
+					'topicflag' => 1,//（1.普通，2.热门，3.精华）
+					'topiccontentpic' => $topiccontentpic//图片链接地址	
+																								
+	);
+    updatepostcredits('+',$user['uid'],'post');
+	print_r(json_encode($topic));
+	return;
+}
+
+else if($ac == 'publishreply')//发表一级回复贴接口
+{
+	$reply = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$tid = $reply['topicid'];
+	$pic = 0;
+	if(isset($reply['file']))//如果包含图片
+	{
+		$doc = date("Ym")."/".date("d")."/";
+		$prefix = "../data/attachment/forum/";
+		$temppath = $prefix.$doc;
+		$pic = 2;
+		$pi = base64_decode($reply['file']);//编码转换从手机端传来的由二进制转换来的字符串数据
+		$ppp = pic_path();
+		$pic_res = extend_upload_pictrue($ppp['dir'],$pi);
+		$path = $ppp['path'];
+	}
+	//$nowposition = DB::num_rows(DB::query("SELECT * FROM ".DB::table('forum_post')." WHERE tid = $tid"));
+	//$positon = $nowposition + 1;//帖子位置信息
+	$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$reply['userid']);//用户注册时的基本信息
+	$nowtot = DB::fetch_first("SELECT pid FROM ".DB::table('forum_post')." ORDER BY pid DESC");
+	$tot = $nowtot['pid'] + 1;//帖子的编号
+	$replypic = array();	
+//	if(isset($reply['pic']))
+//	{
+//		$pic = 2;		
+//		foreach($topic['pic'] as $key => $val)
+//		{
+//			$fileinfo = upload_picture($val);
+//			$bigpic = createpicname('big');//大图路径
+//			$smallpic = createpicname('small');//小图路径
+//			changeimagesize($fileinfo['pic'],$bigpic,'big');
+//			$smallsize = changeimagesize($fileinfo['pic'],$smallpic,'small');
+//			$replypic[$key]['big'] = $bigpic;
+//			$replypic[$key]['small'] = $smallpic; 
+//			insert_breviary($tid,$bigpic,$smallpic,$smallsize['width'],$smallsize['hight']);
+//		}
+//	}
+//	else
+//	{
+			
+//	}
+	$time = time();	
+	$data = array(
+				'pid' => $tot,
+				'fid' => $reply['section'],//加一个版块的地址标识
+				'tid' => $reply['topicid'],
+				'author' => $user['username'],
+				'authorid' => $reply['userid'],
+				'dateline' => $time,
+				'message' => $reply['content'],
+				'useip' => getIP(),
+				'attachment' => $pic,
+	);	
+	$res = DB::insert('forum_post',$data,true);
+    if($res < 0)//插入数据失败
+	{
+		print_r(json_encode(array('status' => 0,'errormessage' => '数据写入出错，请及时联系管理员')));
+		return;	
+	}
+	if(isset($reply['file']))//将图片数据写入数据库
+	{
+		DB::insert('forum_attachment',array('tid' => $tid,'pid' => $tot,'uid' => $reply['userid'],'tableid' => $tid%10));
+		$attachment_id = DB::fetch_first("SELECT aid,tableid FROM ".DB::table('forum_attachment')." ORDER BY aid DESC");
+		DB::insert('forum_attachment_'.$attachment_id['tableid'],array('aid' => $attachment_id['aid'],'tid' => $tid,'pid' => $tot,'uid' => $reply['userid'],'dateline' => $time,'filename' => $path,'attachment' => $path,'isimage' => 1));
+	}
+	DB::update('forum_thread',array('lastpost' => $time,'lastposter' => $user['username']),array('tid' => $tid));
+	$path_array[] = array(
+				'bigpath' => $URL."/data/attachment/forum/".$path,
+				'smallpath' => $URL."/data/attachment/forum/".$path,
+				'sizewidth' => $reply['width'],
+				'sizeheight' => $reply['height']
+	);	
+	$firstreply = array(
+						'status' => true,//数据格式是什么
+						'userid' => $reply['userid'],
+						'replyid' => $tot,
+						'topicid' => $reply['topicid'],//所回复的帖子ID						
+						'replycontent' => $reply['content'],
+						'publishdate' => $time,
+						'replypicarray' => $path_array//图片链接地址	
+	);
+	updatepostcredits('+',$user['uid'],'reply');
+	$t_detail = DB::fetch_first("SELECT replies FROM ".DB::table('forum_thread')." WHERE tid = $tid");
+	DB::update("forum_thread",array('replies' => $t_detail['replies'] + 1),array('tid' => $tid));	//同步浏览数
+	print_r(json_encode($firstreply));
+	return;
+}
+
+else if($ac == 'gettopic')//获取帖子接口
+{
+	$post = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$kind = $post['kind'];
+	$page = $post['page'];
+	$offset = ($page-1) * $rows;
+	$top_topic = DB::fetch_all("SELECT * FROM ".DB::table('forum_thread')." WHERE displayorder = 1 ORDER BY tid DESC LIMIT 1");//置顶帖
+	$toptopic = array();
+	if(!empty($top_topic))
+	{
+		foreach($top_topic as $key => $val)
+		{
+			$toptopic[] = array(					
+							'topicid' => $val['tid'],
+							'section' => $val['fid'],//1 => junwang2
+							'authorid' => $val['authorid'],
+							'flag' => 1,//置顶
+							'topictitle' => $val['subject'],										
+							'reviewcount' => $val['views'],
+							'replycount' => $val['replies'],
+							'publishdate' => $val['dateline'],
+							'lastreplydate' => $val['lastpost'],	
+			);
+		}
+		$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$top_topic[0]['authorid']);//置顶帖子的用户注册时的基本信息
+	}
+	if($kind == 'all')//所有帖子接口
+	{
+		$all_topic = DB::fetch_all("SELECT * FROM ".DB::table('forum_thread')." WHERE fid = ".$post['section']." AND displayorder = 0 ORDER BY lastpost DESC LIMIT $offset,$rows");
+		if(empty($all_topic))
+		{
+			print_r(json_encode(array('status' => true,'errormessage' => '当前页没有帖子')));
+			return;
+		}
+		$alltopic_res = array();		
+		foreach($all_topic as $key => $val)
+		{
+			$value = $val;
+			if($val['attachment'] == 2)//如果有图片，选取第一章图片
+			{
+				$pic_file = DB::fetch_all("SELECT attachment FROM ".DB::table('forum_attachment_').($value['tid']%10)." WHERE tid = ".$value['tid']." LIMIT 1");
+				foreach($pic_file as $kkey => $vval)
+				{
+					$pic[0] = array(
+								  'smallpath' => $pic_prefix.$vval['attachment'],
+								  'bigpath' => $pic_prefix.$vval['attachment'],
+								  'sizewidth' => 300,
+								  'sizeheight' => 120
+					);					
+				}
+			}
+			else
+			{
+				$pic = '';	
+			}
+			$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$value['authorid']);//用户注册时的基本信息
+			$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$value['authorid']);//用户扩展信息			
+			$avatarstatus = $user['avatarstatus'];
+			if($avatarstatus == 0)
+			{
+				if($user_extend_nick['gender'] == 1)//男生头像
+				{
+					$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+				}
+				else
+				{
+					$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+				}
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($user['uid'],'middle');//头像
+			}
+			$post_topic = DB::fetch_first("SELECT * FROM ".DB::table('forum_post')." WHERE tid = ".$value['tid']." AND first = 1");			
+			$alltopic_res[] = array(
+								'topicid' => $value['tid'],
+								'topicsection' => $value['fid'],//映射为1 => junwang2
+								'topicauthorid' => $value['authorid'],
+								'topicauthoravatarpath' => $avatarpath,//用户头像
+								'topicflag' => 2,
+								'topictitle' => $value['subject'],
+								'topiccontent' => $post_topic['message'],	
+								'topiccontentpicarray' => $pic,//一张图片											
+								'viewcount' => $value['views'],
+								'replycount' => $value['replies'],
+								'publishdate' => $value['dateline'],
+								'lastreplydate' => $value['lastpost'],
+			);
+		}
+		$alltopic = array(
+						'status' => true,
+						'toptopicarray' => $toptopic,
+						//'toptopicarray' => $alltopic_res
+						'topicarray' => $alltopic_res
+		);
+		print_r(json_encode($alltopic));
+		return;
+	}
+	else if($kind == 'hot')//热门帖接口
+	{
+		$hottopic = DB::fetch_all("SELECT * FROM ".DB::table('forum_thread')." WHERE fid = ".$post['section']." AND displayorder = 0 ORDER BY tid LIMIT 10");
+		if(empty($hottopic))
+		{
+			print_r(json_encode(array('status' => true,'errormessage' => '暂时没有热门帖')));
+			return;
+		}
+		$hottopic_detail = array();
+		foreach($hottopic as $key => $val)
+		{
+				$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$val['authorid']);//用户注册时的基本信息
+				$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$val['authorid']);//用户扩展信息			
+				$avatarstatus = $user['avatarstatus'];
+				if($avatarstatus == 0)
+				{
+					if($user_extend_nick['gender'] == 1)//男生头像
+					{
+						$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+					}
+					else
+					{
+						$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+					}
+				}
+				else
+				{
+					$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($user['uid'],'middle');//头像
+				}
+				$hot_post = DB::fetch_first("SELECT * FROM ".DB::table('forum_post')." WHERE tid = ".$val['tid']." AND first = 1");
+				if($hot_post['attachment'] != 0)//如果有图片，选取第一张图片
+				{
+					$pic_file = DB::fetch_first("SELECT attachment FROM ".DB::table('forum_attachment_').($val['tid']%10)." WHERE tid = ".$val['tid']);
+					$pic[0] = array(
+								 'smallpath' => $pic_prefix.$pic_file['attachment'],
+								 'bigpath' => $pic_prefix.$pic_file['attachment'],
+								 'sizewidth' => 300,
+								 'sizeheight' => 120
+					);					
+				}
+				else
+				{
+					$pic = '';	
+				}
+				$hottopic_detail[] = array(
+									'topicid' => $val['tid'],
+									'topicsection' => $val['fid'],//映射为1 => junwang2
+									'topicauthorid' => $val['authorid'],
+									'topicauthoravatarpath' => $avatarpath,//用户头像
+									'topicflag' => 3,//热门，精华
+									'topictitle' => $val['subject'],
+									'topiccontent' => $hot_post['message'],	
+									'topiccontentpicarray' => $pic,											
+									'viewcount' => $val['views'],
+									'replycount' => $val['replies'],
+									'publishdate' => $val['dateline'],
+									'lastreplydate' => $val['lastpost'],
+				);
+			}			
+		$hottopic = array(
+						'status' => true,
+						'toptopicarray' => $toptopic,
+						//'toptopicarray' => $alltopic_res
+						'topicarray' => $hottopic_detail	
+		);
+		print_r(json_encode($hottopic));
+		return;
+	}
+//		$time = strtotime(date("Y-m-d",strtotime("-8 day")));
+//		$tt = DB::fetch_all("SELECT tid FROM ".DB::table('forum_thread')." WHERE fid = ".$post['section']." AND dateline >= $time");
+//		foreach($tt as $k => $v)
+//		{
+//			$dd[$v['tid']] = DB::fetch_all("SELECT tid,pid,authorid FROM ".DB::table('forum_post')." WHERE tid = ".$v['tid']." AND first = 1 AND fid = ".$post['section']." GROUP BY authorid");
+//		}		
+//				print_r($dd);
+//		return;
+//		$res = array();
+//		foreach($dd as $key => $val)
+//		{
+//			$res[$val[0]['tid']]['cnt'] = count($val);
+//			$res[$val[0]['tid']]['tid'] = $val[0]['tid']; 
+//			$res[$val[0]['tid']]['authorid'] = $val[0]['authorid'];
+//		}			
+//		rsort($res);
+//		$hottopic_detail = array();
+//		$i = 0;
+//		foreach($res as $kkey => $vval)//前10条
+//		{
+//			if($i < 10)
+//			{				
+//				$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$vval['authorid']);//用户注册时的基本信息
+//				$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$vval['authorid']);//用户扩展信息			
+//				$avatarstatus = $user['avatarstatus'];
+//				if($avatarstatus == 0)
+//				{
+//					if($user_extend_nick['gender'] == 1)//男生头像
+//					{
+//						$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+//					}
+//					else
+//					{
+//						$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+//					}
+//				}
+//				else
+//				{
+//					$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($user['uid'],'middle');//头像
+//				}
+//				$topic = DB::fetch_first("SELECT * FROM ".DB::table('forum_thread')." WHERE tid =".$vval['tid']);
+//				$post = DB::fetch_first("SELECT * FROM ".DB::table('forum_post')." WHERE tid =".$vval['tid']);
+//				if($post['attachment'] == 2)//如果有图片，选取第一章图片
+//				{
+//					$pic_file = DB::fetch_all("SELECT attachment FROM ".DB::table('forum_attachment_').($post['tid']%10)." WHERE tid =".$post['tid']." LIMIT 1");
+//					foreach($pic_file as $key => $val)
+//					{
+//						foreach($pic_file as $key => $val)
+//						{
+//							$pic[] = array(
+//										  'smallpath' => $pic_prefix.$val['attachment'],
+//										  'bigpath' => $pic_prefix.$val['attachment'],
+//										  'sizewidth' => 300,
+//										  'sizeheight' => 120
+//							);					
+//						}
+//					}
+//				}
+//				else
+//				{
+//					$pic = '';	
+//				}
+//				$hottopic_detail[] = array(
+//									'topicid' => $post['tid'],
+//									'topicsection' => $post['fid'],//映射为1 => junwang2
+//									'topicauthorid' => $post['authorid'],
+//									'topicauthoravatarpath' => $avatarpath,//用户头像
+//									'topicflag' => 3,//热门，精华
+//									'topictitle' => $topic['subject'],
+//									'topiccontent' => $post['message'],	
+//									'topiccontentpicarray' => $pic,											
+//									'viewcount' => $topic['views'],
+//									'replycount' => $topic['replies'],
+//									'publishdate' => $topic['dateline'],
+//									'lastreplydate' => $topic['lastpost'],
+//				);
+//			}
+//			$i++;
+//		}
+//		$hottopic = array(
+//						'status' => true,
+//						'toptopicarray' => $toptopic,
+//						//'toptopicarray' => $alltopic_res
+//						'topicarray' => $hottopic_detail	
+//		);
+//		print_r(json_encode($hottopic));
+//		return;
+
+	else if($kind == 'essence')//精华帖接口
+	{	
+		$essence = DB::fetch_all("SELECT * FROM ".DB::table('forum_thread')." WHERE digest != 0 AND fid = ".$post['section']." AND displayorder >= 0 LIMIT $offset,$rows");
+		
+		$authorid = $essence[0]['authorid'];
+		if(empty($essence))
+		{
+			print_r(json_encode(array('status' => true,'errormessage' => '此版块暂时没有精华帖')));
+			return;
+		}
+		$essencetopic = array();
+		foreach($essence as $key => $val)
+		{
+			$value = $val;
+			if($val['attachment'] != 0)//如果有图片，选取第一章图片
+			{
+				$pic_file = DB::fetch_all("SELECT attachment FROM ".DB::table('forum_attachment_').($val['tid']%10)." WHERE tid = ".$val['tid']."  LIMIT 1");
+				foreach($pic_file as $kkey => $vval)
+				{
+					foreach($pic_file as $kkkey => $vvval)
+					{
+						$pic[0] = array(
+									  'smallpath' => $pic_prefix.$vvval['attachment'],
+									  'bigpath' => $pic_prefix.$vvval['attachment'],
+									  'sizewidth' => 300,
+									  'sizeheight' => 120
+						);					
+					}
+				}
+			}
+			else
+			{
+				$pic = '';	
+			}
+			$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$value['authorid']);//用户注册时的基本信息
+			$user_extend_nick = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$value['authorid']);//用户扩展信息			
+			$avatarstatus = $user['avatarstatus'];
+			if($avatarstatus == 0)
+			{
+				if($user_extend_nick['gender'] == 1)//男生头像
+				{
+					$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+				}
+				else
+				{
+					$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+				}
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($user['uid'],'middle');//头像
+			}
+			$post = DB::fetch_first("SELECT * FROM ".DB::table('forum_post')." WHERE tid = ".$value['tid']." AND first = 1 LIMIT $offset,$rows");
+			$essencetopic[] = array(
+								'topicid' => $value['tid'],
+								'topicsection' => $value['fid'],//映射为1 => junwang2
+								'topicauthorid' => $value['authorid'],
+								'topicauthoravatarpath' => $avatarpath,//用户头像
+								'topicflag' => 4,//热门，精华
+								'topictitle' => $value['subject'],
+								'topiccontent' => $post['message'],	
+								'topiccontentpicarray' => $pic,											
+								'viewcount' => $value['views'],
+								'replycount' => $value['replies'],
+								'publishdate' => $value['dateline'],
+								'lastreplydate' => $value['lastpost'],
+			);
+		}	
+		$res = array(
+					'status' => true,
+					'toptopicarray' => $toptopic,
+					//'toptopicarray' => $alltopic_res
+					'topicarray' => $essencetopic
+		);	
+		print_r(json_encode($res));
+		return;	
+	}
+}
+
+else if($ac == 'gettopicdetail')//获取帖子详细信息
+{
+	$topic = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$page = $topic['page'];
+	$offset = ($page-1) * 20;
+	$userid = $topic['userid'];
+	$t_detail = DB::fetch_first("SELECT * FROM ".DB::table('forum_thread')." WHERE tid = ".$topic['topicid']);
+	$p_detail = DB::fetch_first("SELECT * FROM ".DB::table('forum_post')." WHERE tid = ".$topic['topicid']." AND first = 1 AND invisible != -5");
+	$reply_detail = DB::fetch_all("SELECT * FROM ".DB::table('forum_post')." WHERE tid = ".$topic['topicid']." AND first != 1 AND invisible != -5 LIMIT $offset,20");
+	$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$t_detail['authorid']);
+	$user_extend = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$t_detail['authorid']);	
+	if(empty($t_detail))
+	{
+		print_r(json_encode(array('status' => false,'errormessage' => '该主题帖不存在，可能已经被删除')));
+		return;
+	}
+	$reply = array();
+	if(!empty($reply_detail))
+	{		
+		foreach($reply_detail as $key => $val)
+		{			
+			$path = array();
+			if($val['authorid'] == $topic['userid'])
+			{
+				$host = true;
+			}
+			else
+			{
+				$host = false;
+			}
+			if($val['attachment'] != 0)
+			{
+				$path_fetch = DB::fetch_all("SELECT attachment FROM ".DB::table('forum_attachment_').($t_detail['tid']%10)." WHERE tid = ".$t_detail['tid']." AND pid = ".$val['pid']);				
+				if(!empty($path_fetch))
+				{
+					foreach($path_fetch as $kkkey => $vvval)
+					{
+						$path[] = array(
+									'bigpath' => $URL."/data/attachment/forum/".$vvval['attachment'],
+									'smallpath' => $URL."/data/attachment/forum/".$vvval['attachment'],
+									'sizewidth' => 300,
+									'sizeheight' => 120
+						);
+					}
+				}
+			}
+			else
+			{
+				$path = '';
+			}
+			$replyuser = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$val['authorid']);
+			$replyuser_extend = DB::fetch_first("SELECT * FROM ".DB::table('common_member_profile')." WHERE uid = ".$val['authorid']);
+			$group = DB::fetch_first("SELECT grouptitle FROM ".DB::table('common_usergroup')." WHERE groupid = ".$replyuser['groupid']);
+			$avatarstatus = $replyuser['avatarstatus'];
+			if($avatarstatus == 0)
+			{
+				if($replyuser_extend['gender'] == 1)//男生头像
+				{
+					$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+				}
+				else
+				{
+					$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+				}
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($val['authorid'],'middle');//头像
+			}
+			$reply[] = array(
+							'replyid' => $val['pid'],
+							'replycontent' => $val['message'],
+							'replypicarray' => $replypic,//回复的图片地址
+							'replyauthorname' => $val['author'],
+							'replyauthorid' => $val['authorid'],
+							'replyauthoravatarpath' => $avatarpath,
+							'replyauthorgender' => $replyuser_extend['gender'],
+							'replyauthorusergroup' => $group['grouptitle'],//用户所属用户组
+							'replyposition' => $val['position'],
+							'host' => $host,
+							'publishdate' => $val['dateline'],
+							'replypicarray' => $path
+			);
+		}
+	}
+	if($t_detail['attachment'] != 0)
+	{
+		$topicpic = DB::fetch_all("SELECT attachment FROM ".DB::table('forum_attachment_').($t_detail['tid']%10)." WHERE tid = ".$topic['topicid']." AND pid = ".$p_detail['pid']);
+		foreach($topicpic as $key => $val)
+		{
+			$pic[] = array(
+						'bigpath' => $URL."/data/attachment/forum/".$val['attachment'],
+						'smallpath' => $URL."/data/attachment/forum/".$val['attachment'],
+						'sizewidth' => 300,
+						'sizeheight' => 123
+			);
+		}
+	}
+	$usergroup = DB::fetch_first("SELECT grouptitle FROM ".DB::table('common_usergroup')." WHERE groupid =".$user['groupid']);
+	$useravatarstatus = $user['avatarstatus'];
+	if($useravatarstatus == 0)
+	{
+		if($user_extend['gender'] == 1)//男生头像
+		{
+			$useravatarpath = $URL.'/uc_server/images/man_middle.gif';
+		}
+		else
+		{
+			$useravatarpath = $URL.'/uc_server/images/female_middle.gif';
+		}
+	}
+	else
+	{
+		$useravatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($user['uid'],'middle');//头像
+	}
+	$topicdetail = array(
+				'status' => true,
+				'userid' => $topic['userid'],
+				'topicid' => $topic['topicid'],		
+				'section' => $topic['section'],
+				'topictitle' => $t_detail['subject'],
+				'topiccontent' => $p_detail['message'],										
+				'publishdate' => $t_detail['dateline'],//time()格式传送
+				'lastreplydate' => $t_detail['lastpost'],
+				'viewcount' => $t_detail['views'],										
+				'replycount' => $t_detail['replies'],
+				'topicflag' => 1,//1  普通帖   2  热门贴   3  精华
+				'topicauthorname' => $t_detail['author'],										
+				'topicauthorid' => $t_detail['authorid'],
+				'topicauthoravatarpath' => $useravatarpath,//头像							
+				'topicauthorgender' => $user_extend['gender'],
+				'topicauthorusergroup' => $usergroup['grouptitle'],
+				'topicpicarray' => $pic,//主题帖中附图的数组													
+				'replyarray' => $reply
+	);
+	DB::update('forum_thread',array('views' => $t_detail['views'] + 1),array('tid' => $topic['topicid']));	//同步浏览数
+	print_r(json_encode($topicdetail));
+	return;
+	
+}
+
+if($ac == "replytome")//回复过我的帖子
+{
+	$reply = json_decode(file_get_contents("php://input"),true);//获取手机客户端传过来的json数据
+	$userid = $reply['userid'];
+	$mytopicandreply = DB::fetch_all("SELECT tid,subject FROM ".DB::table('forum_post')." WHERE authorid = $userid");
+	$myinfo = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = $userid");//用户注册时的基本信息
+	if(empty($mytopicandreply))
+	{
+		print_r(json_encode(array('status' => false,'errormessage' => '还没有用户回复我')));
+		return;
+	}
+	$allreplytome = array();
+	foreach($mytopicandreply as $key => $val)
+	{
+		$each = DB::fetch_all("SELECT * FROM ".DB::table('forum_post')." WHERE tid = ".$val['tid']." AND first = 0");
+		if(empty($each))
+		{
+			continue;
+		}
+		foreach($each as $kkey => $vval)
+		{
+			$user = DB::fetch_first("SELECT * FROM ".DB::table('common_member')." WHERE uid = ".$vval['authorid']);//用户注册时的基本信息
+			$avatarstatus = $user['avatarstatus'];
+			if($avatarstatus == 0)
+			{
+				if($user_extend_nick['gender'] == 1)//男生头像
+				{
+					$avatarpath = $URL.'/uc_server/images/man_middle.gif';
+				}
+				else
+				{
+					$avatarpath = $URL.'/uc_server/images/female_middle.gif';
+				}
+			}
+			else
+			{
+				$avatarpath = $URL.'/uc_server/data/avatar/'.avatar_path($userid,'middle');//头像
+			}
+			$allreplytome[] = array(
+									'topicid' => $val['tid'],
+									'replyid' => $vval['pid'],
+									'replyauthorname' => $vval['authorname'],
+									'replyauthorid' => $vval['authorid'],
+									'replyauthoravatarpath' => $avatarpath,
+									'replycontent' => $vval['message'],
+									'topictitle' => $val['subject'],
+									'publishdate' => $vval['dateline'],
+			);
+		}
+	}
+	$res = array(
+				'status' => true,
+				'userid' => $reply['userid'],
+				'page' => $reply['page'],
+				'array' => $allreplytome
+	);
+	print_r(json_encode($res));
+	return;
+}
+
+function upload_picture($file) //系统函数图片上传
+{
+	$uploadfiles = pic_upload($file,'forum',200,200,2);	
+	if(!$uploadfiles)
+	{  
+		return false;
+	}
+	else
+	{
+		return $uploadfiles;		
+	}
+}
+
+function pic_path()//自定义系统生成图片名称规则
+{
+	$doc = date("Ym")."/".date("d")."/";
+	$prefix = "../data/attachment/forum/";
+	$time = time();
+	$rrd = rand(1,10000000);//产生一个一百万以内的伪随机数
+	$dir = $prefix.$doc.$rrd.$time."_post.jpg";
+	$res = array(
+				'dir' => $dir,
+				'path' => $doc.$rrd.$time."_post.jpg"
+	);
+	return $res;
+}
+
+function extend_upload_pictrue($newfilepath,$data)//扩展手机发帖子和回复的图片上传
+{
+	$newfile = fopen($newfilepath,"w");
+	fwrite($newfile,$data);
+	fclose($newfile);
+	return true; 
+}
+
+function getbinay($dir)//获取二进制数据
+{
+	$fp=fopen($dir,"r");// $image['name']图片路径 进过简单测试 放在根目录了，正式使用时更换成正确的路径
+	$file=fread($fp,filesize($dir)); 
+	return $file; 
+}
+
+function createpicname($kind)//生成目标图片的路径和名字
+{
+	$time = time();
+	$rrd = rand(1,10000000);//产生一个一百万以内的伪随机数
+	return "upload/".$time.$rrd."_".$kind.".jpg";	
+}
+
+function changeimagesize($srcpic,$dstpic,$kind)//$srcpic 需要压缩的原图片， $dstpic 压缩的目标图片   $kind 需要转换的图片的类型  big,small
+{	
+	$size = array();
+	$srcimagestream = file_get_contents($srcpic);
+	$srcimage = imagecreatefromstring($srcimagestream);//从字符串中的图像流新建一图像
+	$srcw = imagesx($srcimage);//原图的宽
+	$srch = imagesy($srcimage);//原图的高
+	if($kind == 'big')
+	{
+		if($srcw <= 300)
+		{
+			$bigimage = imagecreatetruecolor($srcw,$srch);
+			imagecopyresized($bigimage,$srcimage,0,0,0,0,$srcw,$srch,$srcw,$srch);//将图像重新定义大小后写入新的图像对象
+			imagepng($bigimage,$dstpic);
+			$size['width']=$srcw;
+			$size['hight']=$srch;
+		}
+		else
+		{
+			$bigW = 300;
+			$bigH = $srch * (300 / $srcw);
+			$bigimage = imagecreatetruecolor($bigW,$bigH);
+			imagecopyresized($bigimage,$srcimage,0,0,0,0,$bigW,$bigH,$srcw,$srch);//将图像重新定义大小后写入新的图像对象
+			imagepng($bigimage,$dstpic);
+			$size['width']=$bigW;
+			$size['hight']=$bigH;			
+		}
+	}	
+	else if($kind == 'small')
+	{
+		if($srch <= 200 && $srcw <= 300)
+		{
+			$smallimage = imagecreatetruecolor($srcw,$srch);
+			imagecopyresized($smallimage,$srcimage,0,0,0,0,$srcw,$srch,$srcw,$srch);
+			imagepng($smallimage,$dstpic);
+			$size['width']=$srcw;
+			$size['hight']=$srch;
+		}
+		else
+		{
+			if($srch <= 200 && $srcw > 300)
+			{
+				$smallW = 300;
+				$smallH = $srch * (300 / $smallW);
+				$smallimage = imagecreatetruecolor($smallW,$smallH);
+				imagecopyresized($smallimage,$srcimage,0,0,0,0,$smallW,$smallH,$srcw,$srch);
+				imagepng($smallimage,$dstpic);
+				$size['width']=$smallW;
+				$size['hight']=$smallH;
+			}
+			else if($srch > 200 && $srcw <= 300)
+			{
+				$smallH = 200;
+				$smallW = $srcw * (200 / $srch);
+				$smallimage = imagecreatetruecolor($smallW,$smallH);
+				imagecopyresized($smallimage,$srcimage,0,0,0,0,$smallW,$smallH,$srcw,$srch);
+				imagepng($smallimage,$dstpic);
+				$size['width']=$smallW;
+				$size['hight']=$smallH;				
+			}
+			else
+			{
+				$wratio = 300 / $srcw;
+				$hratio = 200 / $srch;
+				if($wratio < $hratio)//按照比率小的进行缩放
+				{
+					$smallW = 300;
+					$smallH = $srch * $wratio;
+					$smallimage = imagecreatetruecolor($smallW,$smallH);
+					imagecopyresized($smallimage,$srcimage,0,0,0,0,$smallW,$smallH,$srcw,$srch);
+					imagepng($smallimage,$dstpic);
+					$size['width']=$smallW;
+					$size['hight']=$smallH;
+				}
+				else
+				{
+					$smallW = $srcw * $hratio;
+					$smallH = 200;
+					$smallimage = imagecreatetruecolor($smallW,$smallH);
+					imagecopyresized($smallimage,$srcimage,0,0,0,0,$smallW,$smallH,$srcw,$srch);
+					imagepng($smallimage,$dstpic);
+					$size['width']=$smallW;
+					$size['hight']=$smallH;
+				}
+			}
+		}
+	}
+	return $size;
+}
+
+function getIP()//获取用户真实IP
+{ 
+	if (isset($_SERVER))
+	{ 
+		if (isset($_SERVER['HTTP_X_FORWARDED_FOR']))
+		{ 
+			$realip = $_SERVER['HTTP_X_FORWARDED_FOR']; 
+		}
+		elseif (isset($_SERVER['HTTP_CLIENT_IP'])) 
+		{ 
+			$realip = $_SERVER['HTTP_CLIENT_IP']; 
+		}
+		else 
+		{ 
+			$realip = $_SERVER['REMOTE_ADDR']; 
+		} 
+	} 
+	else 
+	{ 
+		if(getenv("HTTP_X_FORWARDED_FOR")) 
+		{ 
+			$realip = getenv( "HTTP_X_FORWARDED_FOR"); 
+		} 
+		elseif(getenv("HTTP_CLIENT_IP")) 
+		{ 
+			$realip = getenv("HTTP_CLIENT_IP"); 
+		} 
+		else 
+		{ 
+			$realip = getenv("REMOTE_ADDR"); 
+		} 
+	} 
+	return $realip; 
+}
+
+function insert_breviary($pid,$bigpath,$smallpath,$width,$hight)
+{
+	$data = array(
+				'pid' => $pid,
+				'bigpath' =>  $bigpath,
+				'smallpath' => $smallpath,
+				'swidth' => $width,
+				'shight' => $hight
+	);
+	$res = DB::insert('forum_pic_extend',$data);
+	if($res < 0)
+	{
+		return false;
+	}
+	return true;
+}
+
+function avatar_path($uid,$size='middle')
+{
+	 $size= in_array($size,array('big','middle','small')) ?$size:'middle';
+	 $uid=abs(intval($uid));//UID取整数绝对值
+	 $uid= sprintf("%09d",$uid);//前边加0补齐9位，例如UID为31的用户变成 000000031
+	 $dir1=substr($uid, 0, 3); //取左边3位，即 000
+	 $dir2=substr($uid, 3, 2); //取4-5位，即00
+	 $dir3=substr($uid, 5, 2); //取6-7位，即00
+// 下面拼成用户头像路径，即000/00/00/31_avatar_middle.jpg
+	return $dir1.'/'.$dir2.'/'.$dir3.'/'.substr($uid, -2)."_avatar_$size.jpg";
+}
+
+function mmkdir($path)
+{
+	if(isset($path))
+		return $path;
+	else
+	{
+		mkdir($path,777);
+	}
+}
+
+//function mkrdir($dir)
+//{ 
+//    return (is_dir($dir) || (mkrdir(dirname($dir)) && mkdir($dir, 0777))); 
+//}
+function mkdirs($dir, $mode = 0777)  
+{  
+	if (is_dir($dir) || @mkdir($dir, $mode)) 
+		return TRUE;  
+	if (!mkdirs(dirname($dir), $mode)) return FALSE;  
+	return @mkdir($dir, $mode);  
+} 
+
+function notification($userid,$devicetoken,$notice)
+{
+	if($userid == 0)
+	{
+		$del_token = DB::delete("push_information",array('device' => $devicetoken));
+		$insert_token = DB::insert("push_information",array('userid' => $userid,'device' => $devicetoken,'notification' => $notice));
+		return;
+	}
+	$del_by_userid = DB::delete("push_information",array('userid' => $userid));
+	$del_by_token = DB::delete("push_information",array('device' => $devicetoken));
+	$res = DB::insert("push_information",array('userid' => $userid,'device' => $devicetoken,'notification' => $notice));	
+}
+?>
